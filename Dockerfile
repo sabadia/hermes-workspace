@@ -15,8 +15,8 @@ RUN corepack enable && apt-get update && apt-get install -y --no-install-recomme
 WORKDIR /app
 
 # Install deps (cache-friendly: copy only manifests first)
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+RUN node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json')); p.pnpm={onlyBuiltDependencies:['esbuild','electron','electron-winstaller','unrs-resolver']}; fs.writeFileSync('package.json', JSON.stringify(p,null,2));" && pnpm install --frozen-lockfile
 
 # Copy sources and build
 COPY . .
