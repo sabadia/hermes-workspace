@@ -12,6 +12,55 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { readHermesConfig } from './hermes-config-reader'
+
+// ── API Key Resolution (env → config.yaml fallback) ─────────────────────────
+
+/**
+ * Resolve an API key with fallback chain:
+ *  1. process.env[envName]
+ *  2. config.yaml — model.api_key (if provider matches) or custom_providers.*.api_key
+ *  3. null
+ */
+function resolveApiKey(envName: string, providerHint?: string): string | null {
+  // 1. Environment variable (existing behavior)
+  const envVal = process.env[envName]?.trim()
+  if (envVal) return envVal
+
+  // 2. config.yaml fallback
+  try {
+    const cfg = readHermesConfig()
+
+    // Check model.api_key if the primary provider matches
+    if (providerHint && cfg.model?.api_key?.trim()) {
+      const cfgProvider = cfg.model.provider?.toLowerCase()
+      if (cfgProvider === providerHint.toLowerCase()) {
+        return cfg.model.api_key.trim()
+      }
+    }
+
+    // Check custom_providers for matching provider
+    if (cfg.custom_providers) {
+      for (const [, cp] of Object.entries(cfg.custom_providers)) {
+        if (!cp.api_key?.trim()) continue
+
+        if (providerHint === 'openai' && cp.base_url?.includes('api.openai.com')) {
+          return cp.api_key.trim()
+        }
+        if (providerHint === 'openrouter' && cp.base_url?.includes('openrouter.ai')) {
+          return cp.api_key.trim()
+        }
+        if (providerHint === 'anthropic' && cp.base_url?.includes('anthropic.com')) {
+          return cp.api_key.trim()
+        }
+      }
+    }
+  } catch {
+    // config read failed, fall through
+  }
+
+  return null
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -769,7 +818,7 @@ export async function fetchCodexUsage(): Promise<ProviderUsageResult> {
 
 export async function fetchOpenAIUsage(): Promise<ProviderUsageResult> {
   const now = Date.now()
-  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  const apiKey = resolveApiKey('OPENAI_API_KEY', 'openai')
 
   if (!apiKey) {
     return {
@@ -889,7 +938,7 @@ export async function fetchOpenAIUsage(): Promise<ProviderUsageResult> {
 
 export async function fetchOpenRouterUsage(): Promise<ProviderUsageResult> {
   const now = Date.now()
-  const apiKey = process.env.OPENROUTER_API_KEY?.trim()
+  const apiKey = resolveApiKey('OPENROUTER_API_KEY', 'openrouter')
 
   if (!apiKey) {
     return {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { CLAUDE_API } from './gateway-capabilities'
+import { readHermesConfig } from './hermes-config-reader'
 
 /**
  * Optional bearer token for authenticated OpenAI-compatible endpoints
@@ -47,6 +48,11 @@ async function getDefaultModel(): Promise<string> {
   if (_cachedDefaultModel) return _cachedDefaultModel
   if (process.env.CLAUDE_DEFAULT_MODEL) {
     _cachedDefaultModel = process.env.CLAUDE_DEFAULT_MODEL
+    return _cachedDefaultModel
+  }
+  const configModel = readHermesConfig().model?.default
+  if (configModel) {
+    _cachedDefaultModel = configModel
     return _cachedDefaultModel
   }
   try {

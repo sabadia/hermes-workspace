@@ -1,6 +1,11 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import * as YAML from 'yaml'
+import {
+  readHermesConfig,
+  invalidateHermesConfigCache,
+} from './hermes-config-reader'
 
 export type KnowledgeBaseSource =
   | { type: 'local'; path: string }
@@ -14,35 +19,84 @@ const DEFAULT_CONFIG: KnowledgeBaseConfig = {
   source: { type: 'local', path: '' },
 }
 
-function getConfigPath(): string {
-  const claudeHome =
-    process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes')
-  return path.join(claudeHome, 'knowledge-config.json')
+function hermesHome(): string {
+  return (
+    process.env.HERMES_HOME ??
+    process.env.CLAUDE_HOME ??
+    path.join(os.homedir(), '.hermes')
+  )
 }
 
+function configYamlPath(): string {
+  return path.join(hermesHome(), 'config.yaml')
+}
+
+/** Legacy JSON config path — read-only fallback for migration */
+function legacyJsonPath(): string {
+  return path.join(hermesHome(), 'knowledge-config.json')
+}
+
+/**
+ * Read knowledge config. Priority:
+ * 1. config.yaml  knowledge.source
+ * 2. legacy knowledge-config.json (migration fallback)
+ * 3. default
+ */
 export function readKnowledgeBaseConfig(): KnowledgeBaseConfig {
-  const configPath = getConfigPath()
+  // 1. Try config.yaml
+  const cfg = readHermesConfig()
+  const k = cfg.knowledge as
+    | { source?: Partial<KnowledgeBaseSource> }
+    | undefined
+  if (k?.source && typeof k.source === 'object' && k.source.type) {
+    return { source: k.source as KnowledgeBaseSource }
+  }
+
+  // 2. Legacy JSON fallback
   try {
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8')
+    const jp = legacyJsonPath()
+    if (fs.existsSync(jp)) {
+      const raw = fs.readFileSync(jp, 'utf-8')
       const parsed = JSON.parse(raw) as Partial<KnowledgeBaseConfig>
-      return {
-        source: parsed.source ?? DEFAULT_CONFIG.source,
+      if (parsed.source) {
+        return { source: parsed.source as KnowledgeBaseSource }
       }
     }
   } catch {
-    // ignore parse errors, use default
+    // ignore parse errors
   }
+
   return DEFAULT_CONFIG
 }
 
+/**
+ * Write knowledge config into config.yaml (knowledge: section).
+ * Keeps all other sections intact. Also invalidates the reader cache.
+ */
 export function writeKnowledgeBaseConfig(config: KnowledgeBaseConfig): void {
-  const configPath = getConfigPath()
-  const dir = path.dirname(configPath)
+  const cp = configYamlPath()
+  let doc: Record<string, unknown> = {}
+
+  try {
+    if (fs.existsSync(cp)) {
+      const raw = fs.readFileSync(cp, 'utf-8')
+      const parsed = YAML.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        doc = parsed as Record<string, unknown>
+      }
+    }
+  } catch {
+    // start fresh if unreadable
+  }
+
+  doc.knowledge = { source: config.source }
+
+  const dir = path.dirname(cp)
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
   }
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  fs.writeFileSync(cp, YAML.stringify(doc), 'utf-8')
+  invalidateHermesConfigCache()
 }
 
 export function getKnowledgeBaseEffectiveRoot(): string {

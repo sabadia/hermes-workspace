@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
+import { readHermesConfig } from '../../server/hermes-config-reader'
 import { BEARER_TOKEN, ensureGatewayProbed, getResolvedUrls } from '../../server/gateway-capabilities'
 
 type DecomposeRequest = {
@@ -197,7 +198,7 @@ export const Route = createFileRoute('/api/swarm-decompose')({
         }
         if (workers.length === 0) return json({ error: 'workers[] required' }, { status: 400 })
 
-        const requestedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (process.env.CLAUDE_DEFAULT_MODEL ?? 'claude-opus-4-7')
+        const requestedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (process.env.CLAUDE_DEFAULT_MODEL ?? readHermesConfig().model?.default ?? 'claude-opus-4-7')
 
         try {
           const result = await callOrchestrator(prompt, workers, requestedModel)

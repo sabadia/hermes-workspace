@@ -8,10 +8,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { BEARER_TOKEN, CLAUDE_API, CLAUDE_DASHBOARD_URL } from '../../server/gateway-capabilities'
+import { readHermesConfig } from '../../server/hermes-config-reader'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import YAML from 'yaml'
 
 type RawAssignee = {
   id?: unknown
@@ -28,16 +28,7 @@ type TaskAssignee = {
 }
 
 const CLAUDE_HOME = process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes')
-const CONFIG_PATH = path.join(CLAUDE_HOME, 'config.yaml')
 const PROFILES_PATH = path.join(CLAUDE_HOME, 'profiles')
-
-function readConfig(): Record<string, unknown> {
-  try {
-    return (YAML.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')) as Record<string, unknown>) ?? {}
-  } catch {
-    return {}
-  }
-}
 
 function getProfileNames(): string[] {
   try {
@@ -117,56 +108,59 @@ async function fetchJson(url: string): Promise<unknown | null> {
   }
 }
 
+/** Shared GET handler — reused by claude-tasks-assignees.ts alias route. */
+export async function handleTaskAssigneesGet(request: Request): Promise<Response> {
+  if (!isAuthenticated(request)) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+
+  const config = readHermesConfig()
+  const tasksConfig = (config.tasks ?? {}) as Record<string, unknown>
+  const humanReviewer = (tasksConfig.human_reviewer as string) || null
+
+  // Prefer the dashboard plugin endpoint: it is the source used by the
+  // Hermes kanban CLI and includes ~/.hermes/profiles plus assignees
+  // already present on the board.
+  const remotePayload =
+    await fetchJson(`${CLAUDE_DASHBOARD_URL}/api/plugins/kanban/assignees`) ??
+    await fetchJson(`${CLAUDE_API}/api/tasks/assignees`)
+  const remoteAssignees = remotePayload
+    ? normalizeAssigneePayload(remotePayload, humanReviewer)
+    : []
+
+  const profiles = getProfileNames()
+  const merged = new Map<string, TaskAssignee>()
+  for (const assignee of remoteAssignees) {
+    merged.set(assignee.id, assignee)
+  }
+  for (const id of profiles) {
+    if (!merged.has(id)) {
+      merged.set(id, { id, label: titleCaseProfile(id), isHuman: id === humanReviewer })
+    }
+  }
+  if (humanReviewer && !merged.has(humanReviewer)) {
+    merged.set(humanReviewer, {
+      id: humanReviewer,
+      label: titleCaseProfile(humanReviewer),
+      isHuman: true,
+    })
+  }
+
+  const assignees = Array.from(merged.values()).sort((a, b) => {
+    if (a.isHuman !== b.isHuman) return a.isHuman ? -1 : 1
+    return a.label.localeCompare(b.label)
+  })
+
+  return new Response(
+    JSON.stringify({ assignees, humanReviewer }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
 export const Route = createFileRoute('/api/hermes-tasks-assignees')({
   server: {
     handlers: {
-      GET: async ({ request }) => {
-        if (!isAuthenticated(request)) {
-          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
-        }
-
-        const config = readConfig()
-        const tasksConfig = (config.tasks ?? {}) as Record<string, unknown>
-        const humanReviewer = (tasksConfig.human_reviewer as string) || null
-
-        // Prefer the dashboard plugin endpoint: it is the source used by the
-        // Hermes kanban CLI and includes ~/.hermes/profiles plus assignees
-        // already present on the board.
-        const remotePayload =
-          await fetchJson(`${CLAUDE_DASHBOARD_URL}/api/plugins/kanban/assignees`) ??
-          await fetchJson(`${CLAUDE_API}/api/tasks/assignees`)
-        const remoteAssignees = remotePayload
-          ? normalizeAssigneePayload(remotePayload, humanReviewer)
-          : []
-
-        const profiles = getProfileNames()
-        const merged = new Map<string, TaskAssignee>()
-        for (const assignee of remoteAssignees) {
-          merged.set(assignee.id, assignee)
-        }
-        for (const id of profiles) {
-          if (!merged.has(id)) {
-            merged.set(id, { id, label: titleCaseProfile(id), isHuman: id === humanReviewer })
-          }
-        }
-        if (humanReviewer && !merged.has(humanReviewer)) {
-          merged.set(humanReviewer, {
-            id: humanReviewer,
-            label: titleCaseProfile(humanReviewer),
-            isHuman: true,
-          })
-        }
-
-        const assignees = Array.from(merged.values()).sort((a, b) => {
-          if (a.isHuman !== b.isHuman) return a.isHuman ? -1 : 1
-          return a.label.localeCompare(b.label)
-        })
-
-        return new Response(
-          JSON.stringify({ assignees, humanReviewer }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        )
-      },
+      GET: async ({ request }) => handleTaskAssigneesGet(request),
     },
   },
 })

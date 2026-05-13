@@ -1,29 +1,39 @@
 /**
- * Hermes Config API — read/write ~/.hermes/config.yaml and ~/.hermes/.env
- * Gives the web UI the same config power as `hermes setup`
+ * Hermes Config API — read/write config via dashboard API
+ * Falls back to hermes-config-reader for read-only when dashboard unavailable
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createFileRoute } from '@tanstack/react-router'
-import YAML from 'yaml'
 import { isAuthenticated } from '../../server/auth-middleware'
 import {
   ensureGatewayProbed,
   getCapabilities,
 } from '../../server/gateway-capabilities'
 import { createCapabilityUnavailablePayload } from '@/lib/feature-gates'
+import {
+  getConfig,
+  getEnvVars,
+  saveConfig,
+  setEnvVar,
+  deleteEnvVar,
+  getOAuthProviders,
+} from '../../server/claude-dashboard-api'
+import type { EnvVarInfo } from '../../server/claude-dashboard-api'
+import {
+  readHermesConfig,
+  invalidateHermesConfigCache,
+} from '../../server/hermes-config-reader'
 
 type AuthResult = Response | true
 
 const CLAUDE_HOME = process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes')
-const CONFIG_PATH = path.join(CLAUDE_HOME, 'config.yaml')
-const ENV_PATH = path.join(CLAUDE_HOME, '.env')
 
-// Known Hermes providers
+// Fallback provider list — used only when dashboard doesn't expose live providers
 const PROVIDERS = [
-  { id: 'nous', name: 'Nous Portal', authType: 'oauth', envKeys: [] },
-  { id: 'openai-codex', name: 'OpenAI Codex', authType: 'oauth', envKeys: [] },
+  { id: 'nous', name: 'Nous Portal', authType: 'oauth', envKeys: [] as string[] },
+  { id: 'openai-codex', name: 'OpenAI Codex', authType: 'oauth', envKeys: [] as string[] },
   {
     id: 'anthropic',
     name: 'Anthropic',
@@ -66,12 +76,12 @@ const PROVIDERS = [
     authType: 'api_key',
     envKeys: ['XIAOMI_API_KEY'],
   },
-  { id: 'ollama', name: 'Ollama (Local)', authType: 'none', envKeys: [] },
+  { id: 'ollama', name: 'Ollama (Local)', authType: 'none', envKeys: [] as string[] },
   {
     id: 'atomic-chat',
     name: 'Atomic Chat (Local)',
     authType: 'none',
-    envKeys: [],
+    envKeys: [] as string[],
   },
   {
     id: 'custom',
@@ -80,56 +90,6 @@ const PROVIDERS = [
     envKeys: ['CUSTOM_API_KEY'],
   },
 ]
-
-function readConfig(): Record<string, unknown> {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8')
-    const parsed = YAML.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeConfig(config: Record<string, unknown>): void {
-  fs.mkdirSync(CLAUDE_HOME, { recursive: true })
-  fs.writeFileSync(CONFIG_PATH, YAML.stringify(config), 'utf-8')
-}
-
-function readEnv(): Record<string, string> {
-  try {
-    const raw = fs.readFileSync(ENV_PATH, 'utf-8')
-    const env: Record<string, string> = {}
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const eqIdx = trimmed.indexOf('=')
-      if (eqIdx > 0) {
-        const key = trimmed.slice(0, eqIdx).trim()
-        let value = trimmed.slice(eqIdx + 1).trim()
-        // Strip quotes
-        if (
-          (value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))
-        ) {
-          value = value.slice(1, -1)
-        }
-        env[key] = value
-      }
-    }
-    return env
-  } catch {
-    return {}
-  }
-}
-
-function writeEnv(env: Record<string, string>): void {
-  fs.mkdirSync(CLAUDE_HOME, { recursive: true })
-  const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`)
-  fs.writeFileSync(ENV_PATH, lines.join('\n') + '\n', 'utf-8')
-}
 
 function maskKey(key: string): string {
   if (!key || key.length < 8) return '***'
@@ -161,6 +121,27 @@ function checkAuthStore(providerId: string): {
   return { hasToken: false, source: '' }
 }
 
+/**
+ * Try to get live provider list from dashboard API.
+ * Returns null if unavailable or empty.
+ */
+async function fetchLiveProviders(): Promise<typeof PROVIDERS | null> {
+  try {
+    const data = await getOAuthProviders()
+    if (data && Array.isArray(data) && data.length > 0) {
+      return data as typeof PROVIDERS
+    }
+    // Some dashboards return { providers: [...] }
+    const wrapped = data as Record<string, unknown>
+    if (wrapped?.providers && Array.isArray(wrapped.providers) && wrapped.providers.length > 0) {
+      return wrapped.providers as typeof PROVIDERS
+    }
+  } catch {
+    // Dashboard doesn't expose provider list — use fallback
+  }
+  return null
+}
+
 export const Route = createFileRoute('/api/claude-config')({
   server: {
     handlers: {
@@ -168,30 +149,68 @@ export const Route = createFileRoute('/api/claude-config')({
         const authResult = isAuthenticated(request) as AuthResult
         if (authResult !== true) return authResult
         await ensureGatewayProbed()
-        if (!getCapabilities().config) {
+        const caps = getCapabilities()
+
+        if (!caps.config) {
+          // Dashboard unavailable — fall back to read-only hermes-config-reader
+          const localConfig = readHermesConfig() as Record<string, unknown>
+
+          const providerStatus = PROVIDERS.map((p) => ({
+            ...p,
+            configured: false,
+            authSource: 'none',
+            maskedKeys: {} as Record<string, string>,
+          }))
+
+          const modelField = localConfig.model
+          let activeModel = ''
+          let activeProvider = ''
+          if (typeof modelField === 'string') {
+            activeModel = modelField
+            activeProvider = (localConfig.provider as string) || ''
+          } else if (modelField && typeof modelField === 'object') {
+            const modelObj = modelField as Record<string, unknown>
+            activeModel = (modelObj.default as string) || ''
+            activeProvider =
+              (modelObj.provider as string) || (localConfig.provider as string) || ''
+          }
+
           return Response.json({
             ...createCapabilityUnavailablePayload('config'),
-            config: {},
-            providers: [],
-            activeProvider: '',
-            activeModel: '',
+            config: localConfig,
+            providers: providerStatus,
+            activeProvider,
+            activeModel,
             claudeHome: CLAUDE_HOME,
           })
         }
 
-        const config = readConfig()
-        const env = readEnv()
+        // Dashboard available — use API
+        const config = await getConfig()
+        const envVars = await getEnvVars()
+
+        // Try live providers from dashboard, fall back to hardcoded PROVIDERS
+        const liveProviders = await fetchLiveProviders()
+        const providerList = liveProviders ?? PROVIDERS
 
         // Build provider status
-        const providerStatus = PROVIDERS.map((p) => {
+        const providerStatus = providerList.map((p) => {
+          const envKeys = (p as { envKeys?: string[] }).envKeys ?? []
           const hasEnvKey =
-            p.envKeys.length === 0 || p.envKeys.some((k) => !!env[k])
+            envKeys.length === 0 ||
+            envKeys.some((k) => {
+              const info = envVars[k] as EnvVarInfo | undefined
+              return info?.has_value || info?.is_set || false
+            })
           const authStoreCheck = checkAuthStore(p.id)
+          const authType = (p as { authType?: string }).authType ?? 'api_key'
           const hasKey =
-            hasEnvKey || authStoreCheck.hasToken || p.authType === 'none'
+            hasEnvKey || authStoreCheck.hasToken || authType === 'none'
           const maskedKeys: Record<string, string> = {}
-          for (const k of p.envKeys) {
-            if (env[k]) maskedKeys[k] = maskKey(env[k])
+          for (const k of envKeys) {
+            const info = envVars[k] as EnvVarInfo | undefined
+            if (info?.masked_value) maskedKeys[k] = info.masked_value
+            else if (info?.redacted_value) maskedKeys[k] = info.redacted_value
           }
           if (authStoreCheck.hasToken && authStoreCheck.maskedKey) {
             maskedKeys['auth-store'] = authStoreCheck.maskedKey
@@ -250,58 +269,25 @@ export const Route = createFileRoute('/api/claude-config')({
 
         const body = (await request.json()) as Record<string, unknown>
 
-        // Handle config updates
+        // Handle config updates via dashboard API
         if (body.config && typeof body.config === 'object') {
-          const current = readConfig()
-          const updates = body.config as Record<string, unknown>
-
-          // Deep merge
-          function deepMerge(
-            target: Record<string, unknown>,
-            source: Record<string, unknown>,
-          ) {
-            for (const [key, value] of Object.entries(source)) {
-              if (
-                value &&
-                typeof value === 'object' &&
-                !Array.isArray(value) &&
-                target[key] &&
-                typeof target[key] === 'object'
-              ) {
-                deepMerge(
-                  target[key] as Record<string, unknown>,
-                  value as Record<string, unknown>,
-                )
-              } else {
-                target[key] = value
-              }
-            }
-          }
-
-          // Handle null values as explicit removals
-          for (const [key, value] of Object.entries(updates)) {
-            if (value === null) {
-              delete current[key]
-              delete updates[key]
-            }
-          }
-          deepMerge(current, updates)
-          writeConfig(current)
+          await saveConfig(body.config as Record<string, unknown>)
         }
 
-        // Handle env var updates
+        // Handle env var updates via dashboard API
         if (body.env && typeof body.env === 'object') {
-          const currentEnv = readEnv()
           const envUpdates = body.env as Record<string, string | null>
           for (const [key, value] of Object.entries(envUpdates)) {
             if (value === '' || value === null) {
-              delete currentEnv[key]
+              await deleteEnvVar(key)
             } else {
-              currentEnv[key] = value
+              await setEnvVar(key, value)
             }
           }
-          writeEnv(currentEnv)
         }
+
+        // Invalidate local config cache so subsequent reads pick up changes
+        invalidateHermesConfigCache()
 
         return Response.json({
           ok: true,

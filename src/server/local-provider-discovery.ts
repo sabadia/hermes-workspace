@@ -9,10 +9,7 @@
  * - Auto-writes custom_providers to ~/.hermes/config.yaml if not already configured
  */
 
-import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
-import YAML from 'yaml'
+import { readHermesConfig } from './hermes-config-reader'
 
 // -------------------------------------------------------------------
 // Well-known local providers
@@ -243,23 +240,7 @@ void ensureDiscovery()
 // Config auto-writer
 // -------------------------------------------------------------------
 
-const CONFIG_PATH = path.join(
-  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes'),
-  'config.yaml',
-)
-
 const loggedWarnings = new Set<string>()
-
-function readYamlConfig(): Record<string, unknown> {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8')
-    const parsed = YAML.parse(raw)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {}
-  return {}
-}
 
 /**
  * Check if a provider is already in custom_providers config.
@@ -267,7 +248,7 @@ function readYamlConfig(): Record<string, unknown> {
  */
 export function isProviderConfigured(providerId: string): boolean {
   try {
-    const config = readYamlConfig()
+    const config = readHermesConfig() as Record<string, unknown>
     const customProviders = config.custom_providers
     if (!Array.isArray(customProviders)) return false
     return customProviders.some(

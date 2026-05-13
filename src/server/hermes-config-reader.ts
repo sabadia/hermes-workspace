@@ -20,6 +20,8 @@ export type HermesMcpConfig = {
   command?: string
   args?: string[]
   transport?: 'stdio' | 'http' | 'sse'
+  bank_id?: string
+  env?: Record<string, string>
 }
 
 export type HermesConfig = {
@@ -37,6 +39,7 @@ export type HermesConfig = {
     flush_min_turns?: number
     nudge_interval?: number
     char_limit?: number
+    bank_id?: string
   }
   mcp?: Record<string, HermesMcpConfig>
   agent?: {
@@ -59,6 +62,53 @@ export type HermesConfig = {
   security?: {
     tirith_enabled?: boolean
     redact_secrets?: boolean
+  }
+  gateway?: {
+    port?: number
+    host?: string
+    api_key?: string
+    websocket_port?: number
+  }
+  platforms?: Record<string, Record<string, unknown>>
+  skills?: {
+    dir?: string
+    enabled?: string[]
+  }
+  tools?: {
+    enabled_toolsets?: string[]
+  }
+  profiles?: Record<string, Record<string, unknown>>
+  custom_providers?: Record<string, {
+    base_url?: string
+    api_key?: string
+    models?: string[]
+    [key: string]: unknown
+  }>
+  auxiliary?: Record<string, {
+    model?: string
+    provider?: string
+    max_tokens?: number
+    [key: string]: unknown
+  }>
+  delegation?: {
+    max_concurrent_children?: number
+    orchestrator_enabled?: boolean
+    max_spawn_depth?: number
+  }
+  browser?: {
+    provider?: string
+    headless?: boolean
+  }
+  web?: {
+    search_provider?: string
+  }
+  knowledge?: {
+    source?: {
+      type: 'local' | 'github'
+      path?: string
+      repo?: string
+      branch?: string
+    }
   }
   [key: string]: unknown
 }
@@ -178,5 +228,19 @@ export function getHindsightApiKey(): string | null {
 }
 
 export function getHindsightBankId(): string {
-  return process.env.HINDSIGHT_BANK_ID?.trim() || 'lena-paul'
+  // 1. Explicit env override
+  const envId = process.env.HINDSIGHT_BANK_ID?.trim()
+  if (envId) return envId
+
+  // 2. MCP config: mcp_servers.hindsight.bank_id or env.HINDSIGHT_BANK_ID
+  const mcp = getMcpServer('hindsight')
+  if (mcp?.bank_id?.trim()) return mcp.bank_id.trim()
+  if (mcp?.env?.HINDSIGHT_BANK_ID?.trim()) return mcp.env.HINDSIGHT_BANK_ID.trim()
+
+  // 3. memory section bank_id
+  const cfg = readHermesConfig()
+  if (cfg.memory?.bank_id?.trim()) return cfg.memory.bank_id.trim()
+
+  // 4. Generic fallback
+  return 'default'
 }

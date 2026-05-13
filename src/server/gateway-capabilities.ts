@@ -13,12 +13,14 @@
  *      (persisted to ~/.hermes/workspace-overrides.json) — set from the UI
  *      so remote / Tailscale users can relocate without a restart (#101).
  *   2. process.env.HERMES_API_URL / HERMES_DASHBOARD_URL at process start.
- *   3. Default localhost (8642 / 9119).
+ *   3. config.yaml gateway section (port/host from ~/.hermes/config.yaml).
+ *   4. Default localhost (8642 / 9119).
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { readHermesConfig } from './hermes-config-reader'
 
 type WorkspaceOverrides = {
   claudeApiUrl?: string
@@ -60,18 +62,34 @@ function normalizeUrl(u: string): string {
   return u.trim().replace(/\/+$/, '')
 }
 
+// ── config.yaml gateway fallback ──────────────────────────────────
+function gatewayUrlFromConfig(): string | null {
+  const gw = readHermesConfig().gateway
+  if (!gw?.port) return null
+  const host = gw.host || '127.0.0.1'
+  return `http://${host}:${gw.port}`
+}
+
+function dashboardUrlFromConfig(): string | null {
+  // Dashboard port is typically gateway port + 1 or from dashboard section
+  // For now, only use if explicitly configured
+  return null // Dashboard URL not stored in config.yaml gateway section
+}
+
 const _initialOverrides = readOverrides()
 
 export let CLAUDE_API = normalizeUrl(
   _initialOverrides.claudeApiUrl ||
     process.env.HERMES_API_URL ||
     process.env.CLAUDE_API_URL ||
+    gatewayUrlFromConfig() ||
     'http://127.0.0.1:8642',
 )
 export let CLAUDE_DASHBOARD_URL = normalizeUrl(
   _initialOverrides.claudeDashboardUrl ||
     process.env.HERMES_DASHBOARD_URL ||
     process.env.CLAUDE_DASHBOARD_URL ||
+    dashboardUrlFromConfig() ||
     'http://127.0.0.1:9119',
 )
 
@@ -90,7 +108,7 @@ export function setGatewayUrl(input: string | null | undefined): string {
   } else {
     delete overrides.claudeApiUrl
     CLAUDE_API = normalizeUrl(
-      process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || 'http://127.0.0.1:8642',
+      process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || gatewayUrlFromConfig() || 'http://127.0.0.1:8642',
     )
   }
   writeOverrides(overrides)
@@ -112,7 +130,7 @@ export function setDashboardUrl(input: string | null | undefined): string {
   } else {
     delete overrides.claudeDashboardUrl
     CLAUDE_DASHBOARD_URL = normalizeUrl(
-      process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL || 'http://127.0.0.1:9119',
+      process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL || dashboardUrlFromConfig() || 'http://127.0.0.1:9119',
     )
   }
   writeOverrides(overrides)
@@ -125,14 +143,16 @@ export function setDashboardUrl(input: string | null | undefined): string {
 export function getResolvedUrls(): {
   gateway: string
   dashboard: string
-  source: 'override' | 'env' | 'default'
+  source: 'override' | 'env' | 'config' | 'default'
 } {
   const overrides = readOverrides()
   const source = overrides.claudeApiUrl
     ? 'override'
     : (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL)
       ? 'env'
-      : 'default'
+      : gatewayUrlFromConfig()
+        ? 'config'
+        : 'default'
   return { gateway: CLAUDE_API, dashboard: CLAUDE_DASHBOARD_URL, source }
 }
 

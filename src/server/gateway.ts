@@ -99,6 +99,8 @@ function signPayload(privPem: string, payload: string): string {
   return base64UrlEncode(cryptoSign(null, Buffer.from(payload, 'utf8'), createPrivateKey(privPem)) as unknown as Buffer)
 }
 
+import { readHermesConfig } from './hermes-config-reader'
+
 // ── Constants ─────────────────────────────────────────────────────
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000]
 const MAX_RECONNECT_DELAY_MS = 30000
@@ -114,7 +116,14 @@ const CIRCUIT_BREAKER_COOLDOWN_MS = 10000 // how long to stay open
 export function getGatewayConfig() {
   // Check if browser set a custom gateway URL (for network/mobile access)
   const browserUrl = typeof window !== 'undefined' ? (window as any).__GATEWAY_URL__ : undefined
-  const url = browserUrl || process.env.CLAUDE_GATEWAY_URL?.trim() || 'ws://127.0.0.1:18789'
+  // config.yaml websocket_port fallback between env and hardcoded default
+  const wsUrlFromConfig = (): string | null => {
+    const gw = readHermesConfig().gateway
+    if (!gw?.websocket_port) return null
+    const host = gw.host || '127.0.0.1'
+    return `ws://${host}:${gw.websocket_port}`
+  }
+  const url = browserUrl || process.env.CLAUDE_GATEWAY_URL?.trim() || wsUrlFromConfig() || 'ws://127.0.0.1:18789'
   let token = process.env.CLAUDE_GATEWAY_TOKEN?.trim() || ''
   const password = process.env.CLAUDE_GATEWAY_PASSWORD?.trim() || ''
 
