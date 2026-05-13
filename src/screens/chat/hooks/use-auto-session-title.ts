@@ -190,12 +190,25 @@ export function useAutoSessionTitle({
     if (isPending) return
     const signature = `${sessionKey}:${proposedTitle}`
     if (lastAttemptRef.current[friendlyId] === signature) return
-    lastAttemptRef.current[friendlyId] = signature
-    updateSessionTitleState(friendlyId, { status: 'generating', error: null })
-    mutate({
-      friendlyId,
-      sessionKey: sessionKey ?? friendlyId,
-      title: proposedTitle,
-    })
+
+    // Defer client-side title assignment to give the agent's LLM-based
+    // title generator time to produce a meaningful topic-based title.
+    // The agent fires `maybe_auto_title()` in a background thread after
+    // the first exchange and typically completes within 3-8 seconds.
+    // If the agent sets a proper title in the meantime, `shouldGenerate`
+    // will flip to false and this timeout will be a no-op.
+    const timer = setTimeout(() => {
+      // Re-check — the agent may have set a title while we waited
+      if (lastAttemptRef.current[friendlyId] === signature) return
+      lastAttemptRef.current[friendlyId] = signature
+      updateSessionTitleState(friendlyId, { status: 'generating', error: null })
+      mutate({
+        friendlyId,
+        sessionKey: sessionKey ?? friendlyId,
+        title: proposedTitle,
+      })
+    }, 8_000)
+
+    return () => clearTimeout(timer)
   }, [friendlyId, isPending, mutate, proposedTitle, sessionKey, shouldGenerate])
 }

@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { buildResolvedSessionHeaders } from '../../lib/send-stream-session-headers'
-import { buildWorkspaceScopedTextMessage } from '../../lib/workspace-message-scope'
+import { buildWorkspaceDirective } from '../../lib/workspace-message-scope'
 import {
   collectSyntheticLiveToolEvents,
   createSyntheticLiveToolTracker,
@@ -373,11 +373,13 @@ export const Route = createFileRoute('/api/send-stream')({
           resolvedFriendlyId = sessionKey
         }
 
+        // Build workspace context as a separate directive instead of
+        // prepending it to the user message.  Keeping it out of the
+        // message body ensures title generation (both client-side and
+        // agent-side) sees only the user's actual text.
         const workspaceScope = await loadWorkspaceCatalog().catch(() => null)
-        const scopedMessage = buildWorkspaceScopedTextMessage(
-          getChatMessage(message, attachments),
-          workspaceScope,
-        )
+        const workspaceDirective = workspaceScope ? buildWorkspaceDirective(workspaceScope) : ''
+        const cleanMessage = getChatMessage(message, attachments)
 
         // Create streaming response using the SHARED server connection
         const encoder = new TextEncoder()
@@ -520,13 +522,18 @@ export const Route = createFileRoute('/api/send-stream')({
 
                 try {
                   const userContent = buildMultimodalContent(
-                    scopedMessage,
+                    cleanMessage,
                     attachments,
                   )
                   // Inject locale preference so the agent responds in the user's language
                   const locale = typeof body.locale === 'string' ? body.locale.trim() : ''
                   const localeSystemMsg: Array<OpenAICompatMessage> = locale && locale !== 'en'
                     ? [{ role: 'system', content: `Respond in ${locale === 'es' ? 'Spanish' : locale === 'fr' ? 'French' : locale === 'zh' ? 'Chinese' : locale === 'de' ? 'German' : locale === 'ja' ? 'Japanese' : locale === 'ko' ? 'Korean' : locale === 'pt' ? 'Portuguese' : locale === 'ru' ? 'Russian' : locale === 'ar' ? 'Arabic' : 'English'}. The user's interface is set to this language.` }]
+                    : []
+                  // Inject workspace context as a system message so it doesn't pollute
+                  // the user message (which feeds title generation)
+                  const workspaceSystemMsg: Array<OpenAICompatMessage> = workspaceDirective
+                    ? [{ role: 'system', content: workspaceDirective }]
                     : []
                   // Load persisted history for this session, then append user message
                   const persistedMessages = getLocalMessages(portableSessionKey)
@@ -544,6 +551,7 @@ export const Route = createFileRoute('/api/send-stream')({
                   // Use persisted history if available, otherwise fall back to client-sent history
                   const effectiveHistory = persistedHistory.length > 0 ? persistedHistory : history
                   const portableMessages: Array<OpenAICompatMessage> = [
+                    ...workspaceSystemMsg,
                     ...localeSystemMsg,
                     ...effectiveHistory,
                     {
@@ -578,7 +586,7 @@ export const Route = createFileRoute('/api/send-stream')({
                     >()
                     try {
                       const responsesStream = streamResponses({
-                        input: scopedMessage,
+                        input: workspaceDirective ? `${workspaceDirective}\n\n${cleanMessage}` : cleanMessage,
                         conversationHistory: effectiveHistory,
                         model:
                           typeof body.model === 'string' ? body.model : undefined,
@@ -963,13 +971,21 @@ export const Route = createFileRoute('/api/send-stream')({
               })()
 
               try {
+                // Merge workspace context into system_message alongside
+                // thinking level.  Keeps the user message clean for title
+                // generation on the agent side.
+                const systemParts: string[] = []
+                if (workspaceDirective) systemParts.push(workspaceDirective)
+                if (thinking) systemParts.push(thinking)
+                const mergedSystemMessage = systemParts.length > 0 ? systemParts.join('\n') : undefined
+
                 await streamChat(
                 sessionKey,
                 {
-                  message: scopedMessage,
+                  message: cleanMessage,
                   model:
                     typeof body.model === 'string' ? body.model : undefined,
-                  system_message: thinking,
+                  system_message: mergedSystemMessage,
                   attachments: attachments || undefined,
                 },
                 {

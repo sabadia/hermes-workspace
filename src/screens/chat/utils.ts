@@ -54,6 +54,10 @@ function stripChannelPrefix(text: string): string {
 function cleanUserText(raw: string): string {
   let text = raw
 
+  // Remove <workspace_context ... /> XML tags injected by the workspace UI
+  // These carry working-directory metadata and must not leak into titles or previews
+  text = text.replace(/<workspace_context[^>]*\/>\s*/gi, '')
+
   // Remove "Conversation info (untrusted metadata):" headers + JSON block
   // Format: "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\n"
   text = text.replace(
