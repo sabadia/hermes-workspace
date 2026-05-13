@@ -828,10 +828,20 @@ export async function probeGateway(options?: {
       sessions: dashboard.available || legacySessions,
       enhancedChat,
       skills: dashboard.available || legacySkills,
-      // Memory is always available: workspace reads $HERMES_HOME/MEMORY.md +
-      // memory/*.md + memories/*.md directly from the local filesystem.
-      // No remote gateway endpoint is required.
-      memory: true,
+      // Memory availability follows the agent's config.yaml:
+      // enabled when memory.memory_enabled !== false AND a provider is reachable.
+      memory: (() => {
+        try {
+          const { readHermesConfig } = require('./hermes-config-reader')
+          const cfg = readHermesConfig()
+          if (cfg.memory?.memory_enabled === false) return false
+          // Provider-agnostic: if any memory adapter is available, memory is on
+          const { getActiveMemoryAdapter } = require('./memory-adapters')
+          return getActiveMemoryAdapter().available()
+        } catch {
+          return true // fallback to legacy filesystem behaviour
+        }
+      })(),
       config: dashboard.available || legacyConfig,
       jobs: dashboard.available || legacyJobs,
       mcp,

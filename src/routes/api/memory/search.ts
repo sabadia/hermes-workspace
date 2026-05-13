@@ -14,7 +14,7 @@ export const Route = createFileRoute('/api/memory/search')({
         const url = new URL(request.url)
         const query = url.searchParams.get('q') || ''
         try {
-          return json({ results: searchMemoryFiles(query) })
+          return json({ results: await searchMemoryFiles(query) })
         } catch (error) {
           return json(
             {

@@ -12,7 +12,7 @@ export const Route = createFileRoute('/api/knowledge/graph')({
         }
 
         try {
-          return json(buildKnowledgeGraph())
+          return json(await buildKnowledgeGraph())
         } catch (error) {
           return json(
             {

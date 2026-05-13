@@ -18,9 +18,9 @@ export const Route = createFileRoute('/api/knowledge/list')({
         try {
           const config = readKnowledgeBaseConfig()
           const source = config.source
-          const exists = knowledgeRootExists()
+          const exists = await knowledgeRootExists()
           return json({
-            pages: exists ? listKnowledgePages() : [],
+            pages: exists ? await listKnowledgePages() : [],
             exists,
             source,
           })

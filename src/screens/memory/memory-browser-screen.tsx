@@ -60,20 +60,29 @@ function isDailyMemoryPath(pathValue: string): boolean {
 
 function splitFiles(files: Array<MemoryFileMeta>) {
   const rootMemory = files.find((file) => file.path === 'MEMORY.md') || null
-  const memoryFiles = files
-    .filter(
-      (file) =>
-        file.path.startsWith('memory/') || file.path.startsWith('memories/'),
-    )
-    .sort((a, b) => {
-      if (isDailyMemoryPath(a.path) && isDailyMemoryPath(b.path)) {
-        return b.path.localeCompare(a.path)
-      }
-      return (
+
+  // When the backend returns hindsight:// URIs, every entry is a "memory file"
+  const isHindsightBacked = files.length > 0 && files[0]?.path?.startsWith('hindsight://')
+
+  const memoryFiles = isHindsightBacked
+    ? files.sort((a, b) =>
         Date.parse(b.modified) - Date.parse(a.modified) ||
-        a.path.localeCompare(b.path)
+        a.name.localeCompare(b.name)
       )
-    })
+    : files
+        .filter(
+          (file) =>
+            file.path.startsWith('memory/') || file.path.startsWith('memories/'),
+        )
+        .sort((a, b) => {
+          if (isDailyMemoryPath(a.path) && isDailyMemoryPath(b.path)) {
+            return b.path.localeCompare(a.path)
+          }
+          return (
+            Date.parse(b.modified) - Date.parse(a.modified) ||
+            a.path.localeCompare(b.path)
+          )
+        })
 
   return { rootMemory, memoryFiles }
 }
@@ -379,11 +388,15 @@ export function MemoryBrowserScreen() {
                 ) : null}
 
                 <div className="px-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-primary-400 dark:text-neutral-500">
-                  memory/ or memories/
+                  {files.length > 0 && files[0]?.path?.startsWith('hindsight://')
+                    ? 'Hindsight Memories'
+                    : 'memory/ or memories/'}
                 </div>
                 {memoryFiles.length === 0 ? (
                   <div className="rounded-lg border border-primary-200 bg-primary-50/80 px-3 py-2 text-xs text-primary-400 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-500">
-                    No files in memory/ or memories/
+                    {files.length > 0 && files[0]?.path?.startsWith('hindsight://')
+                      ? 'No memories in Hindsight'
+                      : 'No files in memory/ or memories/'}
                   </div>
                 ) : (
                   memoryFiles.map((file) => (

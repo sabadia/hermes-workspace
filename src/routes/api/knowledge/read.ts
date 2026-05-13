@@ -15,7 +15,7 @@ export const Route = createFileRoute('/api/knowledge/read')({
         const pathParam = url.searchParams.get('path') || ''
 
         try {
-          const { meta, content, backlinks } = readKnowledgePage(pathParam)
+          const { meta, content, backlinks } = await readKnowledgePage(pathParam)
           return json({ page: meta, content, backlinks })
         } catch (error) {
           const message =

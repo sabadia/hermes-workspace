@@ -13,8 +13,8 @@ export type MemoryIntegrationSource = {
 }
 
 export type MemoryIntegrationStatus = {
-  id: 'honcho' | 'byterover'
-  label: 'Honcho memory' | 'Byterover memory'
+  id: 'honcho' | 'byterover' | 'hindsight'
+  label: 'Honcho memory' | 'Byterover memory' | 'Hindsight memory'
   available: boolean
   configured: boolean
   safeToUse: boolean
@@ -460,6 +460,125 @@ export function detectByteroverIntegration(
       : present
         ? 'Byterover presence detected, but no usable config/token was found. Byterover-backed features remain disabled.'
         : 'Byterover not detected. Optional Byterover-backed memory features remain hidden/disabled.',
+    sources,
+    checkedAt: options.now ?? Date.now(),
+  }
+}
+
+// ─── Hindsight ──────────────────────────────────────────────────────────
+
+const HINDSIGHT_ENV_KEYS = [
+  'HINDSIGHT_API_KEY',
+  'HINDSIGHT_BASE_URL',
+  'HINDSIGHT_URL',
+] as const
+
+const HINDSIGHT_CONFIG_KEYS = [
+  'enabled',
+  'url',
+  'base_url',
+  'baseUrl',
+  'api_key',
+  'apiKey',
+] as const
+
+type DetectHindsightOptions = DetectMemoryIntegrationOptions
+export type HindsightIntegrationStatus = MemoryIntegrationStatus & {
+  id: 'hindsight'
+  label: 'Hindsight memory'
+}
+
+function hindsightEnvConfigured(
+  env: Record<string, string | undefined>,
+): boolean {
+  return HINDSIGHT_ENV_KEYS.some((key) => Boolean(env[key]?.trim()))
+}
+
+function configHasHindsight(record: Record<string, unknown> | null): boolean {
+  const hindsightConfig = objectAt(record, 'hindsight')
+  const memoryConfig = objectAt(record, 'memory')
+  const mcpConfig = objectAt(record, 'mcp')
+  const mcpHindsight = objectAt(mcpConfig, 'hindsight')
+  const provider = String(memoryConfig?.provider ?? '').toLowerCase()
+
+  return (
+    hasOwnTruthy(hindsightConfig, HINDSIGHT_CONFIG_KEYS) ||
+    (provider.includes('hindsight') &&
+      hasOwnTruthy(memoryConfig, ['provider', 'hindsight'])) ||
+    hasOwnTruthy(mcpHindsight, ['url', 'enabled'])
+  )
+}
+
+export function detectHindsightIntegration(
+  options: DetectHindsightOptions = {},
+): HindsightIntegrationStatus {
+  const env = options.env ?? process.env
+  const homeDir = options.homeDir ?? os.homedir()
+  const claudeHome = expandHome(
+    options.claudeHome ??
+      env.HERMES_HOME ??
+      env.CLAUDE_HOME ??
+      path.join(homeDir, '.hermes'),
+    homeDir,
+  )
+
+  const processEnvConfigured = hindsightEnvConfigured(env)
+
+  const claudeEnvPath = path.join(claudeHome, '.env')
+  const claudeEnvConfigured = hindsightEnvConfigured(readEnvFile(claudeEnvPath))
+  const claudeConfigPath = path.join(claudeHome, 'config.yaml')
+  const claudeConfigConfigured = configHasHindsight(readYaml(claudeConfigPath))
+
+  const sources: Array<MemoryIntegrationSource> = [
+    {
+      id: 'process-env',
+      label: 'Process environment',
+      present: processEnvConfigured,
+      configured: processEnvConfigured,
+      details: processEnvConfigured
+        ? 'Hindsight env var present in process environment.'
+        : 'No Hindsight env var in process environment.',
+    },
+    fileSource(
+      'claude-env',
+      'Current .env compatibility',
+      claudeEnvPath,
+      claudeEnvConfigured,
+      claudeEnvConfigured
+        ? 'Hindsight env var present in current .env.'
+        : 'No Hindsight env var in current .env.',
+    ),
+    fileSource(
+      'claude-config',
+      'Current config.yaml compatibility',
+      claudeConfigPath,
+      claudeConfigConfigured,
+      claudeConfigConfigured
+        ? 'Hindsight keys found in current config.'
+        : 'No Hindsight keys found in current config.',
+    ),
+  ]
+
+  const configured = sources.some((source) => source.configured)
+  const present = configured || sources.some((source) => source.present)
+  const mode: MemoryIntegrationStatus['mode'] = configured
+    ? 'ready'
+    : present
+      ? 'detected-unconfigured'
+      : 'not-detected'
+
+  return {
+    id: 'hindsight',
+    label: 'Hindsight memory',
+    available: present,
+    configured,
+    safeToUse: configured,
+    mode,
+    summary: configured
+      ? 'Hindsight memory configuration detected. Workspace will use Hindsight for memory and knowledge graph operations.'
+      : present
+        ? 'Hindsight presence detected, but no usable config/token was found. Hindsight-backed features remain disabled.'
+        : 'Hindsight not detected. Optional Hindsight-backed memory features remain hidden/disabled.',
     sources,
     checkedAt: options.now ?? Date.now(),
   }

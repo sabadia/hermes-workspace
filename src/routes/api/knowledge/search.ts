@@ -15,7 +15,7 @@ export const Route = createFileRoute('/api/knowledge/search')({
         const query = url.searchParams.get('q') || ''
 
         try {
-          return json({ results: searchKnowledgePages(query) })
+          return json({ results: await searchKnowledgePages(query) })
         } catch (error) {
           return json(
             {

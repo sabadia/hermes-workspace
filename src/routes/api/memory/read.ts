@@ -14,7 +14,7 @@ export const Route = createFileRoute('/api/memory/read')({
         const url = new URL(request.url)
         const pathParam = url.searchParams.get('path') || ''
         try {
-          const content = readMemoryFile(pathParam)
+          const content = await readMemoryFile(pathParam)
           return json({ path: pathParam, content })
         } catch (error) {
           const message =
