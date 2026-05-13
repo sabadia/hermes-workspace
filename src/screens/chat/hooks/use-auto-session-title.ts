@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { chatQueryKeys } from '../chat-queries'
@@ -7,6 +7,7 @@ import {
   useSessionTitleInfo,
 } from '../session-title-store'
 import { textFromMessage } from '../utils'
+import { generateSessionTitle } from '@/utils/generate-session-title'
 import type { ChatMessage, SessionMeta } from '../types'
 
 const MAX_TITLE_LENGTH = 50
@@ -73,9 +74,12 @@ export function useAutoSessionTitle({
   const lastAttemptRef = useRef<Record<string, string>>({})
 
   const proposedTitle = useMemo(() => {
-    const firstUserText = getFirstUserMessage(messages)
-    if (!firstUserText) return ''
-    return truncateTitle(firstUserText)
+    const snippet = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(0, 6)
+      .map((m) => ({ role: m.role, text: textFromMessage(m).trim() }))
+    if (snippet.length === 0) return ''
+    return generateSessionTitle(snippet, { maxLength: MAX_TITLE_LENGTH, maxWords: 6 })
   }, [messages])
 
   const shouldGenerate = useMemo(() => {
@@ -117,7 +121,7 @@ export function useAutoSessionTitle({
     titleInfo.title,
   ])
 
-  const applyTitle = (
+  const applyTitle = useCallback((
     friendlyIdToUpdate: string,
     title: string,
     source: 'auto' | 'manual' = 'auto',
@@ -152,7 +156,7 @@ export function useAutoSessionTitle({
         })
       },
     )
-  }
+  }, [queryClient])
 
   const mutation = useMutation({
     mutationFn: async (payload: UpdateTitlePayload) => {
@@ -175,10 +179,12 @@ export function useAutoSessionTitle({
       applyTitle(payload.friendlyId, payload.title, 'auto')
       void queryClient.invalidateQueries({ queryKey: chatQueryKeys.sessions })
     },
-    onError: (error, payload) => {
+    onError: (_error, payload) => {
+      // Keep the locally-generated title even if the server sync fails.
+      // The title is already applied optimistically; just mark sync status.
       updateSessionTitleState(payload.friendlyId, {
-        status: 'error',
-        error: error instanceof Error ? error.message : String(error ?? ''),
+        status: 'ready',
+        error: null,
       })
     },
   })
@@ -202,6 +208,8 @@ export function useAutoSessionTitle({
       if (lastAttemptRef.current[friendlyId] === signature) return
       lastAttemptRef.current[friendlyId] = signature
       updateSessionTitleState(friendlyId, { status: 'generating', error: null })
+      // Apply optimistically so the UI shows the title immediately
+      applyTitle(friendlyId, proposedTitle, 'auto')
       mutate({
         friendlyId,
         sessionKey: sessionKey ?? friendlyId,
@@ -210,5 +218,5 @@ export function useAutoSessionTitle({
     }, 8_000)
 
     return () => clearTimeout(timer)
-  }, [friendlyId, isPending, mutate, proposedTitle, sessionKey, shouldGenerate])
+  }, [applyTitle, friendlyId, isPending, mutate, proposedTitle, sessionKey, shouldGenerate])
 }

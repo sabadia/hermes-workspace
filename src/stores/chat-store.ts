@@ -131,6 +131,9 @@ type ChatState = {
   /** Check if a runId is being handled by send-stream */
   isSendStreamRun: (runId: string | undefined) => boolean
 
+  /** Migrate realtime messages and streaming state from one session key to another */
+  migrateSession: (fromSessionKey: string, toSessionKey: string) => void
+
   /** Sessions currently waiting for a response — survives component unmount */
   waitingSessionKeys: Set<string>
   waitingSessionMeta: Record<string, { since: number; runId: string | null }>
@@ -1179,6 +1182,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearAllStreaming: () => {
     if (get().streamingState.size === 0) return
     set({ streamingState: new Map() })
+  },
+
+  migrateSession: (fromSessionKey, toSessionKey) => {
+    if (fromSessionKey === toSessionKey) return
+    const state = get()
+    const realtimeMessages = new Map(state.realtimeMessages)
+    const streaming = new Map(state.streamingState)
+
+    // Copy realtime messages from old key to new key
+    const oldMessages = realtimeMessages.get(fromSessionKey)
+    if (oldMessages && oldMessages.length > 0) {
+      const existingNewMessages = realtimeMessages.get(toSessionKey) ?? []
+      realtimeMessages.set(toSessionKey, [...existingNewMessages, ...oldMessages])
+    }
+
+    // Copy streaming state from old key to new key
+    const oldStreaming = streaming.get(fromSessionKey)
+    if (oldStreaming) {
+      streaming.set(toSessionKey, { ...oldStreaming })
+    }
+
+    set({ realtimeMessages, streamingState: streaming })
   },
 
   mergeHistoryMessages: (sessionKey, historyMessages) => {

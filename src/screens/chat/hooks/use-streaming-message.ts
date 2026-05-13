@@ -24,8 +24,10 @@ export function shouldResolveStreamSession({
   if (resolvedSessionKey === currentSessionKey) return false
   // Bootstrap keys (new, main) should resolve once to a concrete session
   if (requestedSessionKey === 'new' || requestedSessionKey === 'main') return true
-  // Concrete session → never promote a different backend ID
-  return false
+  // Concrete sessions: follow the backend when it explicitly emits a
+  // different session_id (agent continuation). The streamGenerationRef
+  // guard already prevents stale-stream contamination (#297).
+  return true
 }
 
 type StreamingState = {
@@ -465,8 +467,6 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
               ? payload.friendlyId.trim()
               : resolvedSessionKey
           if (resolvedSessionKey !== activeSessionKeyRef.current) {
-            // Guard: only promote backend session IDs for bootstrap keys.
-            // Concrete Workspace sessions must never be overridden (#297).
             if (
               shouldResolveStreamSession({
                 requestedSessionKey: requestedSessionKeyRef.current,
@@ -474,6 +474,10 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
                 resolvedSessionKey,
               })
             ) {
+              // Migrate any in-flight realtime messages / streaming state so the
+              // UI doesn't lose content during the session handoff.
+              const oldKey = activeSessionKeyRef.current
+              useChatStore.getState().migrateSession?.(oldKey, resolvedSessionKey)
               activeSessionKeyRef.current = resolvedSessionKey
               onSessionResolved?.({
                 sessionKey: resolvedSessionKey,
@@ -879,9 +883,6 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
         const resolvedSessionKey = resolvedHeaders.sessionKey
         const resolvedFriendlyId = resolvedHeaders.friendlyId
         if (resolvedSessionKey !== activeSessionKeyRef.current) {
-          // Only promote a backend-returned session ID when the original
-          // request was a bootstrap key ("new"/"main"). Concrete Workspace
-          // sessions must never be overridden — that causes splits (#297).
           if (
             shouldResolveStreamSession({
               requestedSessionKey: params.sessionKey,
@@ -889,6 +890,8 @@ export function useStreamingMessage(options: UseStreamingMessageOptions = {}) {
               resolvedSessionKey,
             })
           ) {
+            const oldKey = activeSessionKeyRef.current
+            useChatStore.getState().migrateSession?.(oldKey, resolvedSessionKey)
             activeSessionKeyRef.current = resolvedSessionKey
             onSessionResolved?.({
               sessionKey: resolvedSessionKey,
