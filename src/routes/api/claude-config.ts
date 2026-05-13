@@ -217,6 +217,7 @@ export const Route = createFileRoute('/api/claude-config')({
           }
           return {
             ...p,
+            envKeys,
             configured: hasKey,
             authSource: authStoreCheck.hasToken
               ? authStoreCheck.source

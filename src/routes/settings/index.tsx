@@ -970,7 +970,7 @@ type ClaudeProvider = {
   id: string
   name: string
   authType: string
-  envKeys: Array<string>
+  envKeys?: Array<string>
   configured: boolean
   maskedKeys: Record<string, string>
 }
@@ -1287,7 +1287,7 @@ function ClaudeConfigSection({
         icon={CloudIcon}
       >
         {data.providers
-          .filter((p) => p.envKeys.length > 0 && p.id !== 'custom')
+          .filter((p) => (p.envKeys?.length ?? 0) > 0 && p.id !== 'custom')
           .map((provider) => (
             <SettingsRow
               key={provider.id}
@@ -1297,7 +1297,7 @@ function ClaudeConfigSection({
               }
             >
               <div className="flex w-full max-w-sm items-center gap-2">
-                {provider.envKeys.map((envKey) => (
+                {provider.envKeys?.map((envKey) => (
                   <div key={envKey} className="flex-1">
                     {editingKey === envKey ? (
                       <div className="flex gap-2">
@@ -1428,7 +1428,7 @@ function ClaudeConfigSection({
         <SettingsRow
           label="Custom OpenAI-compatible"
           description={
-            data.providers.find((p) => p.envKeys.includes('CUSTOM_API_KEY'))
+            data.providers.find((p) => p.envKeys?.includes('CUSTOM_API_KEY'))
               ?.configured
               ? '✅ Configured'
               : '❌ Not configured'
@@ -1471,7 +1471,7 @@ function ClaudeConfigSection({
                     style={{ color: 'var(--theme-muted)' }}
                   >
                     {data.providers.find((p) =>
-                      p.envKeys.includes('CUSTOM_API_KEY'),
+                      p.envKeys?.includes('CUSTOM_API_KEY'),
                     )?.maskedKeys?.['CUSTOM_API_KEY'] || 'Not set'}
                   </span>
                   <Button
@@ -1483,7 +1483,7 @@ function ClaudeConfigSection({
                     }}
                   >
                     {data.providers.find((p) =>
-                      p.envKeys.includes('CUSTOM_API_KEY'),
+                      p.envKeys?.includes('CUSTOM_API_KEY'),
                     )?.configured
                       ? 'Change'
                       : 'Add'}
